@@ -58,7 +58,6 @@ class DeskRaiserBox : public uart::UARTDevice, public Component {
   void send_command(DeskRaiserCommand command);
 
   void get_status();
-  void move_up();
 
  private:
   DeskRaiserState state_{STATE_IDLE};

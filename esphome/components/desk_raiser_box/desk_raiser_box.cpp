@@ -69,7 +69,7 @@ char box_to_char(uint8_t c) {
     case 0xd0:
       return 'r';
     default:
-      ESP_LOGW(TAG, "Cannot decode 7 segment representation: %8b", c);
+      ESP_LOGW(TAG, "Cannot decode 7 segment representation: %x", c);
       return ' ';
   }
 }
@@ -83,6 +83,28 @@ void DeskRaiserBox::loop() {
   // Tasks here will be performed at every call of the main application loop.
   // Note: code here MUST NOT BLOCK (see below)
 
+  this->handle_uart();
+
+  uint64_t now = millis();
+
+  if ((this->uart_state_ == UART_STATE_READY) &&
+      ((now - this->last_request_timestamp_) >
+       35)) {  // sparse status requests (>300ms apart) make the box think it can't communicate with the control panel
+    this->get_status();
+    this->last_request_timestamp_ = now;
+  }
+
+  // TODO: move if needed
+}
+
+void DeskRaiserBox::dump_config() {
+  ESP_LOGCONFIG(TAG, "Desk raiser control box");
+  // ESP_LOGCONFIG(TAG, "  foo = %s", TRUEFALSE(this->foo_));
+  // ESP_LOGCONFIG(TAG, "  bar = %s", this->bar_.c_str());
+  // ESP_LOGCONFIG(TAG, "  baz = %i", this->baz_);
+}
+
+void DeskRaiserBox::handle_uart() {
   uint64_t now = millis();
 
   while (this->available()) {
@@ -97,7 +119,6 @@ void DeskRaiserBox::loop() {
         if (c == 0x5A) {
           // Response has begun
           this->uart_state_ = UART_STATE_RECEIVING;
-          ESP_LOGVV(TAG, "Response has begun. New state: %d", this->uart_state_);
         }
         break;
       case UART_STATE_RECEIVING:
@@ -105,9 +126,6 @@ void DeskRaiserBox::loop() {
         this->rx_data_.push_back(c);
         if (this->rx_data_.size() < 5)
           continue;  // read another byte
-
-        ESP_LOGVV(TAG, "Received 5 bytes: %x %x %x %x %x", this->rx_data_[0], this->rx_data_[1], this->rx_data_[2],
-                  this->rx_data_[3], this->rx_data_[4]);
 
         uint8_t checksum = (this->rx_data_[0] + this->rx_data_[1] + this->rx_data_[2] + this->rx_data_[3]) & 0xFF;
 
@@ -122,14 +140,19 @@ void DeskRaiserBox::loop() {
 
     if (this->uart_state_ == UART_STATE_RECEIVED_VALID) {
       // TODO: Decode response
+      // TODO: Check 4th byte
+      // 0x00	Everything on the display is completely off
+      // 0x01	Timer indicator is turned on
+      // 0x10	7 segment display is on (3 characters + decimal point)
+      // 0x11	7 segment display is on as well as the timer indicator
       std::string response("");
-      for (int i = 0; i < 4; i++) {
+      for (int i = 0; i < 3; i++) {
         response += box_to_char(this->rx_data_[i]);
         if (this->rx_data_[i] & 0x80)
           response += '.';
       }
 
-      if ((this->last_response_ != response) || ((now - this->last_response_timestamp_) > 1000)) {
+      if ((this->last_response_ != response) || ((now - this->last_response_timestamp_) > 5000)) {
         this->last_response_ = response;
         this->last_response_timestamp_ = now;
         ESP_LOGV(TAG, "New response received: %s", response.c_str());
@@ -144,21 +167,6 @@ void DeskRaiserBox::loop() {
       this->rx_data_.clear();
     }
   }
-
-  if ((this->uart_state_ == UART_STATE_READY) && ((now - this->last_request_timestamp_) > 1000)) {
-    ESP_LOGV(TAG, "Requesting status");
-    this->get_status();
-    this->last_request_timestamp_ = now;
-  }
-
-  // TODO: move if needed
-}
-
-void DeskRaiserBox::dump_config() {
-  ESP_LOGCONFIG(TAG, "Desk raiser control box");
-  // ESP_LOGCONFIG(TAG, "  foo = %s", TRUEFALSE(this->foo_));
-  // ESP_LOGCONFIG(TAG, "  bar = %s", this->bar_.c_str());
-  // ESP_LOGCONFIG(TAG, "  baz = %i", this->baz_);
 }
 
 void DeskRaiserBox::press_key() { this->key_pin_->digital_write(true); }

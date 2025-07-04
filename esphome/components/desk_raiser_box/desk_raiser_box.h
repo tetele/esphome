@@ -53,6 +53,8 @@ class DeskRaiserBox : public uart::UARTDevice, public Component {
   uint64_t last_request_timestamp_{0};
   uint64_t last_response_timestamp_{0};
 
+  void handle_uart();
+
   void press_key();
   void release_key();
   void send_command(DeskRaiserCommand command);

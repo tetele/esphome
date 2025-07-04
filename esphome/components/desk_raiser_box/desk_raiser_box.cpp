@@ -86,15 +86,84 @@ void DeskRaiserBox::loop() {
   this->handle_uart();
 
   uint64_t now = millis();
+  static uint64_t command_start_time;
 
-  if ((this->uart_state_ == UART_STATE_READY) &&
-      ((now - this->last_request_timestamp_) >
-       35)) {  // sparse status requests (>300ms apart) make the box think it can't communicate with the control panel
-    this->get_status();
-    this->last_request_timestamp_ = now;
+  // ESP_LOGV(TAG, "");
+
+  if (this->uart_state_ == UART_STATE_READY) {  // sparse status requests (>300ms apart) make the box think it can't
+                                                // communicate with the control panel
+    switch (this->state_) {
+      case STATE_IDLE:
+        if (this->next_command_ != COMMAND_NONE) {
+          this->state_ = STATE_EXECUTING_COMMAND;
+          command_start_time = now;
+        } else {
+          this->send_command(INTERACTION_STATUS);
+        }
+        break;
+      case STATE_EXECUTING_COMMAND:
+        switch (this->next_command_) {
+          case COMMAND_NONE:
+            this->state_ = STATE_IDLE;
+            break;
+          case COMMAND_GO_TO_MEM_1:
+            if (now - command_start_time < 150) {
+              this->send_command(INTERACTION_MEM_1);
+            } else {
+              this->release_key();
+              this->next_command_ = COMMAND_NONE;
+            }
+            break;
+          case COMMAND_GO_TO_MEM_2:
+            if (now - command_start_time < 150) {
+              this->send_command(INTERACTION_MEM_2);
+            } else {
+              this->release_key();
+              this->next_command_ = COMMAND_NONE;
+            }
+            break;
+          case COMMAND_GO_TO_MEM_3:
+            if (now - command_start_time < 150) {
+              this->send_command(INTERACTION_MEM_3);
+            } else {
+              this->release_key();
+              this->next_command_ = COMMAND_NONE;
+            }
+            break;
+          case COMMAND_PRESS_UP:
+            this->send_command(INTERACTION_UP);
+            break;
+          case COMMAND_PRESS_DN:
+            this->send_command(INTERACTION_DN);
+            break;
+          case COMMAND_RELEASE_UP:
+          case COMMAND_RELEASE_DN:
+            this->release_key();
+            this->next_command_ = COMMAND_NONE;
+            break;
+          case COMMAND_UNLOCK_SCREEN:
+            ESP_LOGV(TAG, "Executing command %d for %ims", COMMAND_UNLOCK_SCREEN, now - command_start_time);
+
+            if (now - command_start_time < 3200) {  // 3s mandatory + 0.2 buffer
+              this->send_command(INTERACTION_M);
+            } else {
+              this->release_key();
+              this->next_command_ = COMMAND_NONE;
+              ESP_LOGV(TAG, "Released M for unlock screen");
+            }
+
+            break;
+          default:
+            ESP_LOGW(TAG, "Unsupported command: %d", this->next_command_);
+            this->next_command_ = COMMAND_NONE;
+            this->release_key();  // for safety
+            break;
+        }
+        break;
+    }
   }
 
-  // TODO: move if needed
+  // TODO: move desk if needed
 }
 
 void DeskRaiserBox::dump_config() {
@@ -145,17 +214,19 @@ void DeskRaiserBox::handle_uart() {
       // 0x01	Timer indicator is turned on
       // 0x10	7 segment display is on (3 characters + decimal point)
       // 0x11	7 segment display is on as well as the timer indicator
-      std::string response("");
-      for (int i = 0; i < 3; i++) {
-        response += box_to_char(this->rx_data_[i]);
-        if (this->rx_data_[i] & 0x80)
-          response += '.';
-      }
+      if (this->rx_data_[3] & 0x10) {
+        std::string response("");
+        for (int i = 0; i < 3; i++) {
+          response += box_to_char(this->rx_data_[i]);
+          if (this->rx_data_[i] & 0x80)
+            response += '.';
+        }
 
-      if ((this->last_response_ != response) || ((now - this->last_response_timestamp_) > 5000)) {
-        this->last_response_ = response;
-        this->last_response_timestamp_ = now;
-        ESP_LOGV(TAG, "New response received: %s", response.c_str());
+        if ((this->last_response_ != response) || ((now - this->last_response_timestamp_) > 5000)) {
+          this->last_response_ = response;
+          this->last_response_timestamp_ = now;
+          ESP_LOGV(TAG, "New response received: %s (screen %x)", response.c_str(), this->rx_data_[3]);
+        }
       }
 
       // Restart reading message
@@ -169,11 +240,44 @@ void DeskRaiserBox::handle_uart() {
   }
 }
 
+void DeskRaiserBox::unlock_screen() {
+  ESP_LOGV(TAG, "Unlock screen");
+  this->next_command_ = COMMAND_UNLOCK_SCREEN;
+  this->press_key();
+  ESP_LOGV(TAG, "Next command: %d", this->next_command_);
+}
+
+void DeskRaiserBox::press_up() {
+  ESP_LOGV(TAG, "Press up");
+  this->next_command_ = COMMAND_PRESS_UP;
+  this->press_key();
+  ESP_LOGV(TAG, "Next command: %d", this->next_command_);
+}
+
+void DeskRaiserBox::release_up() {
+  ESP_LOGV(TAG, "Release up");
+  this->next_command_ = COMMAND_RELEASE_UP;
+  ESP_LOGV(TAG, "Next command: %d", this->next_command_);
+}
+
+void DeskRaiserBox::press_dn() {
+  ESP_LOGV(TAG, "Press up");
+  this->next_command_ = COMMAND_PRESS_DN;
+  this->press_key();
+  ESP_LOGV(TAG, "Next command: %d", this->next_command_);
+}
+
+void DeskRaiserBox::release_dn() {
+  ESP_LOGV(TAG, "Release up");
+  this->next_command_ = COMMAND_RELEASE_DN;
+  ESP_LOGV(TAG, "Next command: %d", this->next_command_);
+}
+
 void DeskRaiserBox::press_key() { this->key_pin_->digital_write(true); }
 
 void DeskRaiserBox::release_key() { this->key_pin_->digital_write(false); }
 
-void DeskRaiserBox::send_command(DeskRaiserCommand command) {
+void DeskRaiserBox::send_command(DeskRaiserInteraction command) {
   std::vector<uint8_t> data = {};
 
   if (this->uart_state_ != UART_STATE_READY) {
@@ -184,43 +288,43 @@ void DeskRaiserBox::send_command(DeskRaiserCommand command) {
   this->uart_state_ = UART_STATE_SENDING;
 
   switch (command) {
-    case COMMAND_STATUS:
+    case INTERACTION_STATUS:
       data.push_back(0x00);
       data.push_back(0x00);
       break;
-    case COMMAND_UP:
+    case INTERACTION_UP:
       data.push_back(0x00);
       data.push_back(0x20);
       break;
-    case COMMAND_DN:
+    case INTERACTION_DN:
       data.push_back(0x00);
       data.push_back(0x40);
       break;
-    case COMMAND_UP_DN:
+    case INTERACTION_UP_DN:
       data.push_back(0x00);
       data.push_back(0x60);
       break;
-    case COMMAND_M:
+    case INTERACTION_M:
       data.push_back(0x00);
       data.push_back(0x01);
       break;
-    case COMMAND_MEM_1:
+    case INTERACTION_MEM_1:
       data.push_back(0x00);
       data.push_back(0x02);
       break;
-    case COMMAND_MEM_2:
+    case INTERACTION_MEM_2:
       data.push_back(0x00);
       data.push_back(0x04);
       break;
-    case COMMAND_MEM_3:
+    case INTERACTION_MEM_3:
       data.push_back(0x00);
       data.push_back(0x08);
       break;
-    case COMMAND_T:
+    case INTERACTION_T:
       data.push_back(0x00);
       data.push_back(0x10);
       break;
-    case COMMAND_M_T:
+    case INTERACTION_M_T:
       data.push_back(0x00);
       data.push_back(0x11);
       break;
@@ -241,9 +345,8 @@ void DeskRaiserBox::send_command(DeskRaiserCommand command) {
   this->write_array(data);
 
   this->uart_state_ = UART_STATE_READY;
+  this->last_request_timestamp_ = millis();
 }
-
-void DeskRaiserBox::get_status() { this->send_command(COMMAND_STATUS); }
 
 }  // namespace desk_raiser_box
 }  // namespace esphome

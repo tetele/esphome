@@ -1,6 +1,7 @@
 #pragma once
 
 #include "esphome/core/component.h"
+#include "esphome/core/automation.h"
 #include "esphome/components/uart/uart.h"
 
 #include <string>
@@ -9,24 +10,35 @@
 namespace esphome {
 namespace desk_raiser_box {
 
+enum DeskRaiserInteraction : uint8_t {
+  INTERACTION_STATUS,
+  INTERACTION_UP,
+  INTERACTION_DN,
+  INTERACTION_UP_DN,
+  INTERACTION_M,
+  INTERACTION_MEM_1,
+  INTERACTION_MEM_2,
+  INTERACTION_MEM_3,
+  INTERACTION_T,
+  INTERACTION_M_T,
+};
+
 enum DeskRaiserCommand : uint8_t {
-  COMMAND_STATUS,
-  COMMAND_UP,
-  COMMAND_DN,
-  COMMAND_UP_DN,
-  COMMAND_M,
-  COMMAND_MEM_1,
-  COMMAND_MEM_2,
-  COMMAND_MEM_3,
-  COMMAND_T,
-  COMMAND_M_T,
+  COMMAND_NONE,
+  COMMAND_GO_TO_MEM_1,
+  COMMAND_GO_TO_MEM_2,
+  COMMAND_GO_TO_MEM_3,
+  COMMAND_PRESS_UP,
+  COMMAND_RELEASE_UP,
+  COMMAND_PRESS_DN,
+  COMMAND_RELEASE_DN,
+  COMMAND_UNLOCK_SCREEN,
 };
 
 enum DeskRaiserState : uint8_t {
   STATE_SCREEN_OFF,
   STATE_IDLE,
-  STATE_RAISING,
-  STATE_LOWERING,
+  STATE_EXECUTING_COMMAND,
 };
 
 enum DeskRaiserUARTState : uint8_t {
@@ -46,6 +58,17 @@ class DeskRaiserBox : public uart::UARTDevice, public Component {
 
   void set_key_pin(InternalGPIOPin *pin) { this->key_pin_ = pin; }
 
+  bool is_connected() {
+    return (this->last_response_timestamp_ > this->last_request_timestamp_) &&
+           (this->last_response_timestamp_ - this->last_request_timestamp_ < 100);
+  }
+
+  void unlock_screen();
+  void press_up();
+  void release_up();
+  void press_dn();
+  void release_dn();
+
  protected:
   InternalGPIOPin *key_pin_;
   std::vector<uint8_t> rx_data_{};
@@ -57,13 +80,37 @@ class DeskRaiserBox : public uart::UARTDevice, public Component {
 
   void press_key();
   void release_key();
-  void send_command(DeskRaiserCommand command);
-
-  void get_status();
+  void send_command(DeskRaiserInteraction command);
 
  private:
   DeskRaiserState state_{STATE_IDLE};
   DeskRaiserUARTState uart_state_{UART_STATE_READY};
+  DeskRaiserCommand next_command_{COMMAND_NONE};
+};
+
+template<typename... Ts> class UnlockScreenAction : public Action<Ts...>, public Parented<DeskRaiserBox> {
+ public:
+  void play(Ts... x) override { this->parent_->unlock_screen(); }
+};
+
+template<typename... Ts> class PressUpAction : public Action<Ts...>, public Parented<DeskRaiserBox> {
+ public:
+  void play(Ts... x) override { this->parent_->press_up(); }
+};
+
+template<typename... Ts> class ReleaseUpAction : public Action<Ts...>, public Parented<DeskRaiserBox> {
+ public:
+  void play(Ts... x) override { this->parent_->release_up(); }
+};
+
+template<typename... Ts> class PressDownAction : public Action<Ts...>, public Parented<DeskRaiserBox> {
+ public:
+  void play(Ts... x) override { this->parent_->press_dn(); }
+};
+
+template<typename... Ts> class ReleaseDownAction : public Action<Ts...>, public Parented<DeskRaiserBox> {
+ public:
+  void play(Ts... x) override { this->parent_->release_dn(); }
 };
 
 }  // namespace desk_raiser_box

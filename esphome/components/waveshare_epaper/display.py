@@ -21,6 +21,9 @@ WaveshareEPaperBase = waveshare_epaper_ns.class_(
     "WaveshareEPaperBase", cg.PollingComponent, spi.SPIDevice, display.DisplayBuffer
 )
 WaveshareEPaper = waveshare_epaper_ns.class_("WaveshareEPaper", WaveshareEPaperBase)
+WaveshareEPaperG4 = waveshare_epaper_ns.class_(
+    "WaveshareEPaperG4", WaveshareEPaperBase
+)
 WaveshareEPaperBWR = waveshare_epaper_ns.class_(
     "WaveshareEPaperBWR", WaveshareEPaperBase
 )

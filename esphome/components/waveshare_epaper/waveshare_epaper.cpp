@@ -316,6 +316,9 @@ void HOT WaveshareEPaper::draw_absolute_pixel_internal(int x, int y, Color color
 uint32_t WaveshareEPaper::get_buffer_length_() {
   return this->get_width_controller() * this->get_height_internal() / 8u;
 }  // just a black buffer
+uint32_t WaveshareEPaperG4::get_buffer_length_() {
+  return this->get_width_controller() * this->get_height_internal() / 4u;
+}  // grayscale 4-color buffer, 1 pixel = 2 bits, 4 pixels per byte
 uint32_t WaveshareEPaperBWR::get_buffer_length_() {
   return this->get_width_controller() * this->get_height_internal() / 4u;
 }  // black and red buffer
@@ -323,8 +326,31 @@ uint32_t WaveshareEPaper7C::get_buffer_length_() {
   return this->get_width_controller() * this->get_height_internal() / 8u * 3u;
 }  // 7 colors buffer, 1 pixel = 3 bits, we will store 8 pixels in 24 bits = 3 bytes
 
+void WaveshareEPaperG4::fill(Color color) {
+  this->filled_rectangle(0, 0, this->get_width(), this->get_height(), color);
+}
 void WaveshareEPaperBWR::fill(Color color) {
   this->filled_rectangle(0, 0, this->get_width(), this->get_height(), color);
+}
+void HOT WaveshareEPaperG4::draw_absolute_pixel_internal(int x, int y, Color color) {
+  if (x >= this->get_width_internal() || y >= this->get_height_internal() || x < 0 || y < 0)
+    return;
+
+  const uint8_t brightness = std::max({color.red, color.green, color.blue, color.white});
+  uint8_t color_bitmap = 0xC0;  // start with 0x03 << 6 (pure black)
+  if (brightness > 0x3F)        // >25%
+    if (brightness > 0x7F)      // >50%
+      if (brightness > 0xBF)    // >75%
+        color_bitmap = 0x00;
+      else
+        color_bitmap = 0x40;  // 0x01 << 6
+    else
+      color_bitmap = 0x80;  // 0x02 << 6
+
+  const uint32_t pos = (x + y * this->get_width_internal()) / 4u;
+  const uint8_t subpos = (x & 0x03) << 1;  // number of bits to shift
+
+  this->buffer_[pos] &= ~(color_bitmap >> subpos);
 }
 void HOT WaveshareEPaperBWR::draw_absolute_pixel_internal(int x, int y, Color color) {
   if (x >= this->get_width_internal() || y >= this->get_height_internal() || x < 0 || y < 0)

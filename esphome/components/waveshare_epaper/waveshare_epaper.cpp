@@ -348,9 +348,10 @@ void HOT WaveshareEPaperG4::draw_absolute_pixel_internal(int x, int y, Color col
       color_bitmap = 0x80;  // 0x02 << 6
 
   const uint32_t pos = (x + y * this->get_width_internal()) / 4u;
-  const uint8_t subpos = (x & 0x03) << 1;  // number of bits to shift
+  const uint8_t subpos = (x & 0x03) << 1;  // number of bits to shift, = x%4 * 2
 
-  this->buffer_[pos] &= ~(color_bitmap >> subpos);
+  this->buffer_[pos] &= ~(0xC0 >> subpos);
+  this->buffer_[pos] |= (color_bitmap >> subpos);
 }
 void HOT WaveshareEPaperBWR::draw_absolute_pixel_internal(int x, int y, Color color) {
   if (x >= this->get_width_internal() || y >= this->get_height_internal() || x < 0 || y < 0)

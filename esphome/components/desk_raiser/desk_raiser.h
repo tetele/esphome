@@ -88,6 +88,13 @@ class DeskRaiserControllerUART : public DeskRaiserUART {
 class DeskRaiserPanelUART : public DeskRaiserUART {
  public:
   DeskRaiserPanelUART(uart::UARTComponent *uart) : DeskRaiserUART(uart, 4, 0xA5){};
+
+  bool decode_valid_response();
+
+  void send_text(std::string text);
+protected:
+  DeskRaiserInteraction last_response_{INTERACTION_STATUS};
+  uint64_t last_valid_response_timestamp_{0};
 };
 
 class DeskRaiser : public Component {
@@ -114,6 +121,7 @@ class DeskRaiser : public Component {
 };
 
 char box_to_char(uint8_t c);
+uint8_t char_to_panel(char c);
 std::vector<uint8_t> interaction_bytes(DeskRaiserInteraction interaction);
 
 }  // namespace desk_raiser

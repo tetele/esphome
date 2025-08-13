@@ -72,7 +72,8 @@ void DeskRaiserUART::send_message(std::vector<uint8_t> bytes) {
 
   message.push_back(csum & 0xFF);
 
-  this->uart_->write_array(message);
+  // this->uart_->write_array(message);
+  // this->uart_->flush();
   this->last_request_timestamp_ = millis();
   this->uart_state_ = UART_STATE_READY;
 }
@@ -85,7 +86,7 @@ void DeskRaiserControllerUART::loop() {
     this->send_message(interaction_bytes(INTERACTION_STATUS));
   }
 
-  DeskRaiserUART::loop();
+  // DeskRaiserUART::loop();
 }
 
 bool DeskRaiserControllerUART::decode_valid_response() {
@@ -127,6 +128,99 @@ bool DeskRaiserControllerUART::decode_valid_response() {
   return false;
 }
 
+bool DeskRaiserPanelUART::decode_valid_response() {
+  if (this->uart_state_ == UART_STATE_RECEIVED_VALID) {
+      // TODO: Decode request - parse command
+      // 0xA5 0x00 0x00 0x01 0x01    Idle/Get current display status
+      // 0xA5 0x00 0x20 0x01 0x21    Move up
+      // 0xA5 0x00 0x40 0x01 0x41    Move down
+      // 0xA5 0x00 0x60 0x01 0x61    UP and Down (used to reset)
+      // 0xA5 0x00 0x01 0x01 0x02    M button
+      // 0xA5 0x00 0x02 0x01 0x03    memory 1
+      // 0xA5 0x00 0x04 0x01 0x05    memory 2
+      // 0xA5 0x00 0x08 0x01 0x09    memory 3
+      // 0xA5 0x00 0x10 0x01 0x11    T button
+      // 0xA5 0x00 0x11 0x01 0x12    M+T (to get into settings)
+
+    if ((this->rx_data_[0] == 0x00) && (this->rx_data_[2] == 0x01)) {
+      DeskRaiserInteraction response = INTERACTION_STATUS;
+      switch(this->rx_data_[1]) {
+        case 0x00:
+          response = INTERACTION_STATUS;
+          break;
+        case 0x20:
+          response = INTERACTION_UP;
+          break;
+        case 0x40:
+          response = INTERACTION_DN;
+          break;
+        case 0x60:
+          response = INTERACTION_UP_DN;
+          break;
+        case 0x01:
+          response = INTERACTION_M;
+          break;
+        case 0x02:
+          response = INTERACTION_MEM_1;
+          break;
+        case 0x04:
+          response = INTERACTION_MEM_2;
+          break;
+        case 0x08:
+          response = INTERACTION_MEM_3;
+          break;
+        case 0x10:
+          response = INTERACTION_T;
+          break;
+        case 0x11:
+          response = INTERACTION_M_T;
+          break;
+      }
+
+      uint64_t now = millis();
+
+      if ((this->last_response_ != response) || ((now - this->last_valid_response_timestamp_) > 5000)) {
+        this->last_response_ = response;
+        this->last_valid_response_timestamp_ = now;
+        ESP_LOGV(TAG, "New response received: %i", response);
+
+        this->restart();
+        return true;
+      }
+    }
+
+    // Restart reading message
+    this->restart();
+  }
+
+  return false;
+}
+
+void DeskRaiserPanelUART::send_text(std::string text) {
+  std::vector<uint8_t> data = {};
+
+  bool last_char_complete{false};
+  for (auto &ch: text) {
+    if(last_char_complete && ch == '.') {
+      uint8_t last_byte = data[data.size()-1];
+      data.pop_back();
+      data.push_back(last_byte | 0x80); // add dot
+      last_char_complete = false;
+    } else {
+      if(data.size() > 3) {
+        ESP_LOGW(TAG, "Response must be at most 3 characters");
+        break; // prevent adding more than 3 chracters
+      }
+      data.push_back(char_to_panel(ch));
+      last_char_complete = true;
+    }
+  }
+
+  data.push_back(0x10); // screen on
+
+  this->send_message(data);
+}
+
 void DeskRaiser::setup() {
   // Code here should perform all component initialization,
   //  whether hardware, memory, or otherwise
@@ -140,22 +234,34 @@ void DeskRaiser::loop() {
 
   this->controller_->loop();
 
-  switch (controller_->get_uart_state()) {
-    case UART_STATE_RECEIVED_INVALID:
-      this->controller_->restart();
-      break;
+  // switch (this->controller_->get_uart_state()) {
+  //   case UART_STATE_RECEIVED_INVALID:
+  //     this->controller_->restart();
+  //     break;
 
-    case UART_STATE_RECEIVED_VALID:
-      if (this->controller_->decode_valid_response()) {
-        this->current_height_ = std::stof(this->controller_->get_last_response());
-      }
-      break;
-  }
+  //   case UART_STATE_RECEIVED_VALID:
+  //     if (this->controller_->decode_valid_response()) {
+  //       this->current_height_ = std::stof(this->controller_->get_last_response());
+  //     }
+  //     break;
+  // }
 
-  if (this->panel_ == nullptr)
-    return;
+  // if (this->panel_ == nullptr)
+  //   return;
 
-  this->panel_->loop();
+  // this->panel_->loop();
+
+  // switch (this->panel_->get_uart_state()) {
+  //   case UART_STATE_RECEIVED_INVALID:
+  //     this->panel_->restart();
+  //     break;
+
+  //   case UART_STATE_RECEIVED_VALID:
+  //     if (this->panel_->decode_valid_response()) {
+  //       this->panel_->send_text("---");
+  //     }
+  //     break;
+  // }
 }
 
 void DeskRaiser::dump_config() { ESP_LOGCONFIG(TAG, "Desk raiser control box"); }
@@ -224,6 +330,59 @@ char box_to_char(uint8_t c) {
     default:
       ESP_LOGW(TAG, "Cannot decode 7 segment representation: %x", c);
       return ' ';
+  }
+}
+
+uint8_t char_to_panel(char c) {
+  switch (c) {
+    case '0':
+      return 0x3f;
+    case '1':
+      return 0x06;
+    case '2':
+      return 0x5b;
+    case '3':
+      return 0x4f;
+    case '4':
+      return 0x66;
+    case '5':
+      return 0x6d;
+    case '6':
+      return 0x7d;
+    case '7':
+      return 0x07;
+    case '8':
+      return 0x7f;
+    case '9':
+      return 0x6f;
+    case ' ':
+      return 0x00;
+    case '-':
+      return 0x40;
+    case 'A':
+    case 'a':
+      return 0x77;
+    case 'E':
+    case 'e':
+      return 0x79;
+    case 'F':
+    case 'f':
+      return 0x71;
+    case 'H':
+    case 'h':
+      return 0x76;
+    case 'L':
+    case 'l':
+      return 0x38;
+    case 'T':
+    case 't':
+      return 0x31;
+    case 'R':
+    case 'r':
+      return 0x50;
+    default:
+      ESP_LOGW(TAG, "Cannot encode 7 segment representation: %c", c);
+      return 0x00;
   }
 }
 

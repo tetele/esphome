@@ -77,6 +77,10 @@ char box_to_char(uint8_t c) {
 void DeskRaiserBox::setup() {
   // Code here should perform all component initialization,
   //  whether hardware, memory, or otherwise
+  // if(this->connected_sensor_)
+  //   this->connected_sensor_->publish_initial_state(false);
+  // if(this->screen_lock_sensor_)
+  //   this->screen_lock_sensor_->publish_initial_state(false); // which means screen is locked, lock states are inverted
 }
 
 void DeskRaiserBox::loop() {
@@ -85,13 +89,18 @@ void DeskRaiserBox::loop() {
 
   this->handle_uart();
 
+  // if(this->connected_sensor_ && (this->connected_sensor_->get_state() != this->is_connected())) {
+  //   this->connected_sensor_->publish_state(this->is_connected());
+  // }
+
   uint64_t now = millis();
   static uint64_t command_start_time;
 
   // ESP_LOGV(TAG, "");
 
-  if (this->uart_state_ == UART_STATE_READY) {  // sparse status requests (>300ms apart) make the box think it can't
-                                                // communicate with the control panel
+  if ((this->uart_state_ == UART_STATE_READY) &&
+      ((now - this->last_request_timestamp_) > 14)) {  // sparse status requests (>300ms apart) make the box think it can't
+                                                      // communicate with the control panel
     switch (this->state_) {
       case STATE_IDLE:
         if (this->next_command_ != COMMAND_NONE) {
@@ -204,6 +213,7 @@ void DeskRaiserBox::handle_uart() {
         } else {
           this->uart_state_ = UART_STATE_RECEIVED_VALID;  // Response message from box is valid
         }
+        this->last_response_timestamp_ = now;
         break;
     }
 
@@ -214,6 +224,9 @@ void DeskRaiserBox::handle_uart() {
       // 0x01	Timer indicator is turned on
       // 0x10	7 segment display is on (3 characters + decimal point)
       // 0x11	7 segment display is on as well as the timer indicator
+
+      // ESP_LOGV(TAG, "Received response: %X %X %X %X %X", this->rx_data_[0], this->rx_data_[1], this->rx_data_[2], this->rx_data_[3], this->rx_data_[4]);
+
       if (this->rx_data_[3] & 0x10) {
         std::string response("");
         for (int i = 0; i < 3; i++) {
@@ -222,10 +235,23 @@ void DeskRaiserBox::handle_uart() {
             response += '.';
         }
 
-        if ((this->last_response_ != response) || ((now - this->last_response_timestamp_) > 5000)) {
+        if ((this->last_response_ != response) || ((now - this->last_valid_response_timestamp_) > 5000)) {
           this->last_response_ = response;
-          this->last_response_timestamp_ = now;
+          this->last_valid_response_timestamp_ = now;
           ESP_LOGV(TAG, "New response received: %s (screen %x)", response.c_str(), this->rx_data_[3]);
+
+
+          if (response == "---") {
+            this->screen_locked_ = true;
+            // this->screen_lock_sensor_->publish_state(false);
+          } else {
+            float height = std::stof(response);
+            if(height) {
+              this->screen_locked_ = false;
+              // this->screen_lock_sensor_->publish_state(true);
+              this->current_height_ = height;
+            }
+          }
         }
       }
 
@@ -238,6 +264,27 @@ void DeskRaiserBox::handle_uart() {
       this->rx_data_.clear();
     }
   }
+}
+
+void DeskRaiserBox::go_to_saved_position(uint8_t position) {
+  ESP_LOGV(TAG, "Go to saved position %d", position);
+  switch(position) {
+    case 1:
+      this->next_command_ = COMMAND_GO_TO_MEM_1;
+      this->press_key();
+      break;
+    case 2:
+      this->next_command_ = COMMAND_GO_TO_MEM_2;
+      this->press_key();
+      break;
+    case 3:
+      this->next_command_ = COMMAND_GO_TO_MEM_3;
+      this->press_key();
+      break;
+    default:
+      ESP_LOGW(TAG, "Saved position %d does not exist. Use 1-3", position);
+  }
+  ESP_LOGV(TAG, "Next command: %d", this->next_command_);
 }
 
 void DeskRaiserBox::unlock_screen() {
@@ -261,14 +308,14 @@ void DeskRaiserBox::release_up() {
 }
 
 void DeskRaiserBox::press_dn() {
-  ESP_LOGV(TAG, "Press up");
+  ESP_LOGV(TAG, "Press down");
   this->next_command_ = COMMAND_PRESS_DN;
   this->press_key();
   ESP_LOGV(TAG, "Next command: %d", this->next_command_);
 }
 
 void DeskRaiserBox::release_dn() {
-  ESP_LOGV(TAG, "Release up");
+  ESP_LOGV(TAG, "Release down");
   this->next_command_ = COMMAND_RELEASE_DN;
   ESP_LOGV(TAG, "Next command: %d", this->next_command_);
 }

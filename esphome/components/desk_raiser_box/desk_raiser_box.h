@@ -2,6 +2,7 @@
 
 #include "esphome/core/component.h"
 #include "esphome/core/automation.h"
+#include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/uart/uart.h"
 
 #include <string>
@@ -51,7 +52,9 @@ enum DeskRaiserUARTState : uint8_t {
 };
 
 class DeskRaiserBox : public uart::UARTDevice, public Component {
- public:
+  SUB_BINARY_SENSOR(connected)
+  SUB_BINARY_SENSOR(screen_locked)
+public:
   void setup() override;
   void loop() override;
   void dump_config() override;
@@ -59,10 +62,11 @@ class DeskRaiserBox : public uart::UARTDevice, public Component {
   void set_key_pin(InternalGPIOPin *pin) { this->key_pin_ = pin; }
 
   bool is_connected() {
-    return (this->last_response_timestamp_ > this->last_request_timestamp_) &&
+    return (this->last_response_timestamp_ >= this->last_request_timestamp_) &&
            (this->last_response_timestamp_ - this->last_request_timestamp_ < 100);
   }
 
+  void go_to_saved_position(uint8_t position);
   void unlock_screen();
   void press_up();
   void release_up();
@@ -75,6 +79,10 @@ class DeskRaiserBox : public uart::UARTDevice, public Component {
   std::string last_response_;
   uint64_t last_request_timestamp_{0};
   uint64_t last_response_timestamp_{0};
+  uint64_t last_valid_response_timestamp_{0};
+
+  bool screen_locked_{true};
+  float current_height_;
 
   void handle_uart();
 
@@ -86,6 +94,16 @@ class DeskRaiserBox : public uart::UARTDevice, public Component {
   DeskRaiserState state_{STATE_IDLE};
   DeskRaiserUARTState uart_state_{UART_STATE_READY};
   DeskRaiserCommand next_command_{COMMAND_NONE};
+};
+
+template<typename... Ts> class GoToSavedPositionAction : public Action<Ts...>, public Parented<DeskRaiserBox> {
+ public:
+  TEMPLATABLE_VALUE(uint8_t, position)
+
+  void play(Ts... x) override {
+    ESP_LOGW("desk_raiser_box.action", "Going to position %d", this->position_.value(x...));
+    this->parent_->go_to_saved_position(this->position_.value(x...));
+  }
 };
 
 template<typename... Ts> class UnlockScreenAction : public Action<Ts...>, public Parented<DeskRaiserBox> {

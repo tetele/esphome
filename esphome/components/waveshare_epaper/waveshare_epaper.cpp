@@ -4162,6 +4162,166 @@ void WaveshareEPaper7P5InV2alt::dump_config() {
   LOG_UPDATE_INTERVAL(this);
 }
 
+/* 7.50inV2G4 */
+bool WaveshareEPaper7P5InV2G4::wait_until_idle_() {
+  if (this->busy_pin_ == nullptr) {
+    return true;
+  }
+
+  const uint32_t start = millis();
+  while (this->busy_pin_->digital_read()) {
+    this->command(0x71);
+    if (millis() - start > this->idle_timeout_()) {
+      ESP_LOGI(TAG, "Timeout while displaying image!");
+      return false;
+    }
+    delay(10);
+  }
+  return true;
+}
+
+void WaveshareEPaper7P5InV2G4::initialize() {
+  this->reset_();
+
+  // COMMAND POWER SETTING
+  this->command(0x01);
+  // 1-0=11: internal power
+  this->data(0x07);
+  this->data(0x17);  // VGH&VGL
+  this->data(0x3F);  // VSH
+  this->data(0x26);  // VSL
+  this->data(0x11);  // VSHR
+
+  // VCOM DC Setting
+  this->command(0x82);
+  this->data(0x24);  // VCOM
+
+  // Booster Setting
+  this->command(0x06);
+  this->data(0x27);
+  this->data(0x27);
+  this->data(0x18);
+  this->data(0x17);
+
+  // POWER ON
+  this->command(0x04);
+  delay(100);  // NOLINT
+  this->wait_until_idle_();
+
+  // COMMAND PANEL SETTING
+  this->command(0x00);
+  this->data(0x3F);  // KW-3f   KWR-2F BWROTP 0f BWOTP 1f
+  // COMMAND RESOLUTION SETTING
+  this->command(0x61);
+  this->data(0x03);  // source 800
+  this->data(0x20);
+  this->data(0x01);  // gate 480
+  this->data(0xE0);
+  // COMMAND DUAL SPI OFF
+  this->command(0x15);
+  this->data(0x00);
+  // COMMAND VCOM AND DATA INTERVAL SETTING
+  this->command(0x50);
+  this->data(0x10);  // BDZ 0, BDV b01, N2OCP 0, DDX b00 => KW mode with NEW/OLD, LUTKW (1→0)
+  this->data(0x07);  // CDI b0111 => VCOM and Data Interval = 10(default)
+
+  // // COMMAND TCON SETTING
+  // this->command(0x60);
+  // this->data(0x22);
+  // // Resolution setting
+  // this->command(0x65);
+  // this->data(0x00);
+  // this->data(0x00);  // 800*480
+  // this->data(0x00);
+  // this->data(0x00);
+
+  // COMMAND CCSET
+  this->command(0xE0);
+  this->data(0x02);  // TSFIX 1, CCEN 0
+
+  // COMMAND TSSET
+  this->command(0xE5);
+  this->data(0x5F);
+
+  this->wait_until_idle_();
+}
+
+uint8_t grayscale_translate(uint8_t next_byte) {
+  uint8_t output = 0x00;
+  for (uint8_t j = 0; j < 8; j += 2) {
+    if (((next_byte & (0xC0 >> j)) >> (6 - j)) > 0x40) {
+      output = (output << 1);
+    } else {
+      output = (output << 1) | 0x01;
+    }
+  }
+  return output;
+}
+void HOT WaveshareEPaper7P5InV2G4::display() {
+  uint32_t buf_len = this->get_buffer_length_();
+
+  // COMMAND POWER ON
+  ESP_LOGI(TAG, "Power on the display and hat");
+
+  // This command will turn on booster, controller, regulators, and temperature sensor will be
+  // activated for one-time sensing before enabling booster. When all voltages are ready, the
+  // BUSY_N signal will return to high.
+  this->command(0x04);
+  delay(200);  // NOLINT
+  this->wait_until_idle_();
+
+  // COMMAND DATA START TRANSMISSION OLD DATA
+  this->command(0x10);
+  delay(2);
+  uint32_t current_pixel_per_row = 0;
+  for (uint32_t i = 0; i < buf_len; i += 2) {
+    this->data((grayscale_translate(this->buffer_[i]) << 4) & grayscale_translate(this->buffer_[i + 1]));
+    current_pixel_per_row += 4;
+    if (current_pixel_per_row >= this->get_width_internal()) {
+      for (uint32_t j = 0; j < current_pixel_per_row; j += 4)
+        this->data(0x00);
+    }
+  }
+
+  // COMMAND DATA START TRANSMISSION NEW DATA
+  this->command(0x13);
+  delay(2);
+  current_pixel_per_row = 0;
+  for (uint32_t i = 0; i < buf_len; i += 2) {
+    this->data((grayscale_translate(this->buffer_[i]) << 4) & grayscale_translate(this->buffer_[i + 1]));
+    current_pixel_per_row += 4;
+    if (current_pixel_per_row >= this->get_width_internal()) {
+      for (uint32_t j = 0; j < current_pixel_per_row; j += 4)
+        this->data(0x00);
+    }
+  }
+
+  delay(100);  // NOLINT
+  this->wait_until_idle_();
+
+  // COMMAND DISPLAY REFRESH
+  this->command(0x12);
+  delay(100);  // NOLINT
+  this->wait_until_idle_();
+
+  ESP_LOGV(TAG, "Before command(0x02) (>> power off)");
+  this->command(0x02);
+  this->wait_until_idle_();
+  ESP_LOGV(TAG, "After command(0x02) (>> power off)");
+}
+
+int WaveshareEPaper7P5InV2G4::get_width_internal() { return 800; }
+int WaveshareEPaper7P5InV2G4::get_height_internal() { return 480; }
+uint32_t WaveshareEPaper7P5InV2G4::idle_timeout_() { return 10000; }
+void WaveshareEPaper7P5InV2G4::dump_config() {
+  LOG_DISPLAY("", "Waveshare E-Paper", this);
+  ESP_LOGCONFIG(TAG, "  Model: 7.5inV2rev2");
+  LOG_PIN("  Reset Pin: ", this->reset_pin_);
+  LOG_PIN("  DC Pin: ", this->dc_pin_);
+  LOG_PIN("  Busy Pin: ", this->busy_pin_);
+  LOG_UPDATE_INTERVAL(this);
+}
+
 /* 7.50inV2 with partial and fast refresh */
 bool WaveshareEPaper7P5InV2P::wait_until_idle_() {
   if (this->busy_pin_ == nullptr) {
